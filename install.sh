@@ -124,9 +124,8 @@ DOMAIN_API_URL="https://api-soccer.thai-play.com/api/v1/domainstream?token=35389
 
 echo "[1/16] Adding Nimble Streamer repository and installing required packages..."
 # Add Nimble repository
-sudo bash -c 'echo -e "deb http://nimblestreamer.com/ubuntu jammy/" > /etc/apt/sources.list.d/nimble.list'
-
-wget -q -O - http://nimblestreamer.com/gpg.key | sudo tee /etc/apt/trusted.gpg.d/nimble.asc
+curl -fsSL -o /etc/apt/sources.list.d/nimble.sources \
+     https://nimblestreamer.com/ubuntu/nimble.sources
 
 # Update package lists
 apt-get update
@@ -277,15 +276,27 @@ api_delete() {
 
 echo "[8/16] Detecting public IP and resolving server ID via WMSPanel..."
 
-# Fetch the public IP address of the current host.  If the curl call fails
-# or returns an empty string, fallback to using the first non-loopback
-# address returned by `hostname -I`.  This dual approach increases
-# reliability in environments with restrictive outbound networks.
-PUBLIC_IP="$(curl -fs https://api.ipify.org || true)"
-if [ -z "$PUBLIC_IP" ]; then
-  # Try local network IPs
-  PUBLIC_IP="$(hostname -I | awk '{print $1}')"
+# Determine local IPv4 addresses using the `ip` command.  We list all
+# IPv4 interfaces and extract the address portion before the CIDR
+# notation (e.g. 192.168.1.10/24 -> 192.168.1.10).  These addresses
+# represent potential candidates for matching against the IP list
+# returned by WMSPanel.  We will also use the first address as the
+# default value for PUBLIC_IP.  If `ip` is unavailable, we fall back
+# to using `hostname -I` which returns a space-separated list of
+# assigned addresses.
+LOCAL_IPS="$(ip -o -4 addr list 2>/dev/null | awk '{print $4}' | cut -d/ -f1)"
+if [ -z "$LOCAL_IPS" ]; then
+  # Fall back to hostname -I for a list of addresses if ip command fails
+  LOCAL_IPS="$(hostname -I | awk '{for(i=1;i<=NF;i++) print $i}')"
 fi
+
+# Choose the first local IP as the default public IP.  This IP will be
+# used both for the re-publish destination (if not provided) and for
+# matching server IDs.  It's possible that the machine has multiple
+# interfaces; in such case, the first one is selected.  If no IP
+# addresses were detected, leave PUBLIC_IP empty and rely on user
+# configuration.
+PUBLIC_IP="$(echo "$LOCAL_IPS" | head -n 1)"
 
 # If REPUBLISH_DEST_IP still contains the placeholder, assign the detected
 # public IP as the destination address for the re-publish rule.
@@ -296,7 +307,7 @@ fi
 # Only attempt to auto-detect NEW_SERVER_ID if it still contains the
 # placeholder.  If the user has manually set NEW_SERVER_ID, skip this.
 if [ "$NEW_SERVER_ID" = "[your_new_server_id_here]" ] || [ -z "$NEW_SERVER_ID" ]; then
-  echo "  - NEW_SERVER_ID not provided. Attempting to look up server ID for IP $PUBLIC_IP..."
+  echo "  - NEW_SERVER_ID not provided. Attempting to look up server ID using local IPs: $LOCAL_IPS ..."
   # Poll the WMSPanel API for the servers list.  It may take some time
   # after registration before the new server appears in the API.  Try
   # multiple times with delays to accommodate for propagation.
@@ -309,8 +320,16 @@ if [ "$NEW_SERVER_ID" = "[your_new_server_id_here]" ] || [ -z "$NEW_SERVER_ID" ]
       sleep 6
       continue
     fi
-    # Search for a server whose IP list includes the current public IP
-    DETECTED_ID=$(echo "$servers_json" | jq -r --arg ip "$PUBLIC_IP" '.servers[] | select(.ip? and (.ip | index($ip))) | .id' | head -n 1)
+    # Iterate over each local IP address and try to find a server whose IP list includes it
+    DETECTED_ID=""
+    for ip in $LOCAL_IPS; do
+      DETECTED_ID=$(echo "$servers_json" | jq -r --arg ip "$ip" '.servers[] | select(.ip? and (.ip | index($ip))) | .id' | head -n 1)
+      if [ -n "$DETECTED_ID" ]; then
+        # When a match is found, set PUBLIC_IP to the matching local IP
+        PUBLIC_IP="$ip"
+        break
+      fi
+    done
     if [ -n "$DETECTED_ID" ]; then
       break
     fi
