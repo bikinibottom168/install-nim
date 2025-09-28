@@ -57,6 +57,15 @@
 
 set -euo pipefail
 
+# Trap errors and display a helpful message.  If any command exits with a
+# non-zero status, the following trap will print the line number, the
+# command that failed, and its exit status.  This aids in debugging by
+# providing context about where the script stopped.  The script will
+# still exit after the trap runs because of `set -e`.  To allow
+# continuing after certain errors, you can wrap commands in `|| true` or
+# handle return codes explicitly.
+trap 'echo "Error on or near line ${LINENO}: command \"${BASH_COMMAND}\" exited with status $?" >&2' ERR
+
 # =====================
 # Configurable variables
 # =====================
@@ -78,6 +87,7 @@ CLONE_DEST="/tmp/remove-watermark"
 # WMSPanel API credentials – replace these placeholders with real values
 CLIENT_ID="a5664a75-8fb0-438f-a339-3c06f01d42e4"
 API_KEY="6a522ac72662f7684caeeb69667a3e22"
+
 
 # The unique ID of the newly registered Nimble server.  You can obtain
 # this via the WMSPanel UI or API.  Replace this placeholder after
