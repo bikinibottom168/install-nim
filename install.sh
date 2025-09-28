@@ -68,12 +68,12 @@ NIMBLE_PASSWORD="Iceza0251ZA"
 # Domain for SSL certificate and key paths.  The script expects the
 # Let's Encrypt live directory for this domain to exist or will create it
 # before copying keys from a cloned repository.
-DOMAIN="ssl-main"
+DOMAIN="ikoinomori-park.com"
 LE_PATH="/etc/letsencrypt/live/${DOMAIN}"
 
 # GitHub repository containing custom SSL keys
-GITHUB_REPO="https://github.com/bikinibottom168/ssl-server"
-CLONE_DEST="/tmp/ssl-server"
+GITHUB_REPO="https://github.com/bikinibottom168/remove-watermark"
+CLONE_DEST="/tmp/remove-watermark"
 
 # WMSPanel API credentials – replace these placeholders with real values
 CLIENT_ID="a5664a75-8fb0-438f-a339-3c06f01d42e4"
@@ -313,7 +313,11 @@ if [ "$NEW_SERVER_ID" = "[your_new_server_id_here]" ] || [ -z "$NEW_SERVER_ID" ]
   # multiple times with delays to accommodate for propagation.
   DETECTED_ID=""
   for attempt in {1..10}; do
-    servers_json=$(api_get "/servers")
+    # Use the single /server endpoint instead of /servers. According to the
+    # WMSPanel API, requesting `/v1/server` with client_id (and api_key) returns
+    # a list of server objects including their IP addresses.  We'll match
+    # against those IPs to detect the current server ID.
+    servers_json=$(api_get "/server")
     # Check if the response contains a servers array
     total_servers=$(echo "$servers_json" | jq -r '.servers | length' 2>/dev/null || echo "0")
     if [ "$total_servers" = "null" ] || [ "$total_servers" = "0" ]; then
