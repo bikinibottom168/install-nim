@@ -88,7 +88,6 @@ CLONE_DEST="/tmp/remove-watermark"
 CLIENT_ID="a5664a75-8fb0-438f-a339-3c06f01d42e4"
 API_KEY="6a522ac72662f7684caeeb69667a3e22"
 
-
 # The unique ID of the newly registered Nimble server.  You can obtain
 # this via the WMSPanel UI or API.  Replace this placeholder after
 # registration.
@@ -360,6 +359,17 @@ fi
 # Inform the user if REPUBLISH_DEST_IP has been inferred
 if [ "$REPUBLISH_DEST_IP" = "$PUBLIC_IP" ]; then
   echo "  - Using detected public IP ($PUBLIC_IP) as REPUBLISH_DEST_IP."
+fi
+
+# If NEW_SERVER_ID is still unset or matches the placeholder after the automatic
+# detection attempt, prompt the administrator to enter it manually.  This
+# allows the script to proceed even if the API lookup failed or the server
+# registration hasn't propagated yet.  The input is required for subsequent
+# steps such as alias updates and application creation.  Leaving the value
+# empty will cause later API calls to fail.
+if [ -z "$NEW_SERVER_ID" ] || [ "$NEW_SERVER_ID" = "[your_new_server_id_here]" ]; then
+  echo "  - NEW_SERVER_ID is not set. Please enter the server ID manually."
+  read -r -p "Enter NEW_SERVER_ID for the new Nimble server: " NEW_SERVER_ID
 fi
 
 
