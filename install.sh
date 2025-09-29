@@ -62,8 +62,9 @@ CLONE_DEST="/tmp/remove-watermark"
 echo "[1/7] Adding Nimble Streamer repository and installing required packages..."
 
 # Add Nimble repository
-curl -fsSL -o /etc/apt/sources.list.d/nimble.sources \
-     https://nimblestreamer.com/ubuntu/nimble.sources
+sudo bash -c 'echo -e "deb http://nimblestreamer.com/ubuntu jammy/" > /etc/apt/sources.list.d/nimble.list'
+
+wget -q -O - http://nimblestreamer.com/gpg.key | sudo tee /etc/apt/trusted.gpg.d/nimble.asc
 
 # Update package lists
 apt-get update
