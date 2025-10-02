@@ -112,7 +112,7 @@ update_conf "port" "80"
 update_conf "ssl_port" "443"
 update_conf "ssl_certificate" "${LE_PATH}/fullchain.pem"
 update_conf "ssl_certificate_key" "${LE_PATH}/privkey.pem"
-update_conf "rtmp_buffer_items" "4096"
+update_conf "rtmp_buffer_items" "1024"
 
 # เพิ่ม config ตามที่คุณต้องการ
 update_conf "listen_interfaces" "*"
@@ -124,8 +124,8 @@ update_conf "access_control_allow_headers" "Range"
 update_conf "vod_chunk_duration" "6"
 update_conf "worker_threads" "2"
 update_conf "rtmp_worker_threads" "2"
-update_conf "max_cache_size" "4096"
-update_conf "max_disk_cache_size" "102400"
+update_conf "max_cache_size" "1024"
+update_conf "max_disk_cache_size" "10240"
 
 # =====================
 # 4. Install Certbot and Cloudflare DNS plugin
