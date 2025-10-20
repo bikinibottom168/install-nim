@@ -122,10 +122,10 @@ update_conf "access_control_allow_credentials" "true"
 update_conf "access_control_expose_headers" "Content-Length"
 update_conf "access_control_allow_headers" "Range"
 update_conf "vod_chunk_duration" "6"
-update_conf "worker_threads" "2"
+update_conf "worker_threads" "4"
 update_conf "rtmp_worker_threads" "2"
-update_conf "max_cache_size" "1024"
-update_conf "max_disk_cache_size" "10240"
+update_conf "max_cache_size" "8192"
+update_conf "max_disk_cache_size" "102400"
 
 # =====================
 # 4. Install Certbot and Cloudflare DNS plugin
@@ -160,5 +160,7 @@ service nimble restart
 echo "[7/7] Setting time zone to Asia/Bangkok and enabling NTP synchronisation..."
 timedatectl set-timezone "Asia/Bangkok"
 timedatectl set-ntp true
+
+service nimble restart
 
 echo "All installation tasks completed successfully."
