@@ -112,7 +112,6 @@ update_conf "port" "80"
 update_conf "ssl_port" "443"
 update_conf "ssl_certificate" "${LE_PATH}/fullchain.pem"
 update_conf "ssl_certificate_key" "${LE_PATH}/privkey.pem"
-update_conf "rtmp_buffer_items" "1024"
 
 # เพิ่ม config ตามที่คุณต้องการ
 update_conf "listen_interfaces" "*"
