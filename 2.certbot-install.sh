@@ -5,11 +5,11 @@ set -e
 ### ===============================
 ### CONFIG
 ### ===============================
-CF_API_TOKEN="a7f11f7aa567a9d7fe465d34f669f35087a89"
+CF_API_KEY="a7f11f7aa567a9d7fe465d34f669f35087a89"
+CF_EMAIL="zzeedbet@gmail.com"
+
 CERTBOT_DIR="/certbot"
 CF_INI_PATH="/certbot/cloudflare.ini"
-
-
 
 ### ===============================
 ### CHECK ROOT
@@ -28,6 +28,7 @@ echo "🔧 Installing snapd & certbot..."
 
 apt update
 apt install -y snapd
+
 snap install core
 snap refresh core
 snap install --classic certbot
@@ -46,12 +47,28 @@ snap install certbot-dns-cloudflare
 ### CREATE cloudflare.ini
 ### ===============================
 echo "📁 Creating $CERTBOT_DIR"
-mkdir -p $CERTBOT_DIR
+mkdir -p "$CERTBOT_DIR"
 
 echo "🔐 Creating cloudflare.ini"
 
-cat > $CF_INI_PATH <<EOF
-dns_cloudflare_api_token = $CF_API_TOKEN
+cat > "$CF_INI_PATH" <<EOF
+dns_cloudflare_api_key = $CF_API_KEY
+dns_cloudflare_email = $CF_EMAIL
 EOF
 
-chmod 600 $CF_I_
+chown root:root "$CF_INI_PATH"
+chmod 600 "$CF_INI_PATH"
+
+### ===============================
+### VERIFY
+### ===============================
+echo "🔍 cloudflare.ini:"
+cat "$CF_INI_PATH"
+
+echo "🔍 Certbot version:"
+certbot --version
+
+echo "🔍 Installed plugins:"
+certbot plugins | grep cloudflare || true
+
+echo "✅ Setup complete"
