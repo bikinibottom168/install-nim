@@ -5,7 +5,14 @@ set -euo pipefail
 ### CONFIG
 ### ===============================
 DOMAIN_FILE="./domain.txt"
+
+# cloudflare.ini ต้นฉบับอยู่ path เดียวกับไฟล์ .sh นี้
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CF_INI_SRC="${SCRIPT_DIR}/cloudflare.ini"
+
+# ปลายทางที่ต้องการ
 CF_INI="/certbot/cloudflare.ini"
+
 PROPAGATION=300
 
 NIMBLE_CONF="/etc/nimble/nimble.conf"
@@ -15,7 +22,6 @@ RENEW_DEPLOY_HOOK="/etc/letsencrypt/renewal-hooks/deploy/99-nimble-reload.sh"
 ### HELPERS
 ### ===============================
 restart_nimble() {
-  # Try common service names
   if systemctl list-unit-files | grep -qE '^nimble\.service'; then
     systemctl restart nimble
     return 0
@@ -24,7 +30,6 @@ restart_nimble() {
     systemctl restart nimble-streamer
     return 0
   fi
-  # Fallback: try restarting by name (some systems still accept it)
   systemctl restart nimble 2>/dev/null || systemctl restart nimble-streamer 2>/dev/null || true
 }
 
@@ -37,11 +42,9 @@ update_nimble_ssl_paths() {
     exit 1
   fi
 
-  # Remove existing ssl_certificate / ssl_certificate_key lines (anywhere in file)
-  # then append fresh ones at the end.
-  # (ง่ายและชัวร์: Nimble จะอ่าน directive ล่าสุดได้)
   local tmp
   tmp="$(mktemp)"
+
   grep -vE '^[[:space:]]*ssl_certificate[[:space:]]*=' "$NIMBLE_CONF" \
     | grep -vE '^[[:space:]]*ssl_certificate_key[[:space:]]*=' \
     > "$tmp"
@@ -67,6 +70,21 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
 fi
 
 ### ===============================
+### STEP 1) COPY cloudflare.ini -> /certbot/cloudflare.ini
+### ===============================
+echo "📄 Copy Cloudflare credentials ini -> $CF_INI"
+
+if [ ! -f "$CF_INI_SRC" ]; then
+  echo "❌ ไม่พบไฟล์ต้นฉบับ: $CF_INI_SRC"
+  echo "   (ต้องมี cloudflare.ini อยู่โฟลเดอร์เดียวกับไฟล์ .sh นี้)"
+  exit 1
+fi
+
+mkdir -p "$(dirname "$CF_INI")"
+cp -f "$CF_INI_SRC" "$CF_INI"
+chmod 600 "$CF_INI"
+
+### ===============================
 ### CHECK FILES
 ### ===============================
 if [ ! -f "$DOMAIN_FILE" ]; then
@@ -85,7 +103,6 @@ fi
 RAW_DOMAINS="$(tr -d ' \n\r' < "$DOMAIN_FILE")"
 IFS=',' read -ra DOMAIN_ARRAY <<< "$RAW_DOMAINS"
 
-# Clean empty entries
 CLEAN_DOMAINS=()
 for d in "${DOMAIN_ARRAY[@]}"; do
   [ -n "$d" ] && CLEAN_DOMAINS+=("$d")
@@ -156,8 +173,6 @@ set -euo pipefail
 
 NIMBLE_CONF="/etc/nimble/nimble.conf"
 
-# Certbot sets:
-# RENEWED_LINEAGE=/etc/letsencrypt/live/yourdomain
 FULLCHAIN="${RENEWED_LINEAGE}/fullchain.pem"
 PRIVKEY="${RENEWED_LINEAGE}/privkey.pem"
 
@@ -165,7 +180,6 @@ if [ ! -f "$FULLCHAIN" ] || [ ! -f "$PRIVKEY" ]; then
   exit 0
 fi
 
-# Remove old lines and append new ones
 tmp="$(mktemp)"
 grep -vE '^[[:space:]]*ssl_certificate[[:space:]]*=' "$NIMBLE_CONF" \
   | grep -vE '^[[:space:]]*ssl_certificate_key[[:space:]]*=' \
@@ -182,7 +196,6 @@ EOF2
 cp "$tmp" "$NIMBLE_CONF"
 rm -f "$tmp"
 
-# Restart Nimble (try common names)
 if systemctl list-unit-files | grep -qE '^nimble\.service'; then
   systemctl restart nimble
 elif systemctl list-unit-files | grep -qE '^nimble-streamer\.service'; then
@@ -203,5 +216,6 @@ echo "🧪 Testing renew (dry-run)..."
 certbot renew --dry-run
 
 echo "✅ All done!"
+echo "📌 CF ini: $CF_INI (copied from: $CF_INI_SRC)"
 echo "📌 Cert live dir (primary): /etc/letsencrypt/live/$PRIMARY_DOMAIN"
 echo "📌 Nimble config: $NIMBLE_CONF"
