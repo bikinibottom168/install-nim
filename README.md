@@ -32,8 +32,11 @@ sudo bash 1.install.sh
 # Step 2: ติดตั้ง Certbot + Cloudflare DNS Plugin
 sudo bash 2.certbot-install.sh
 
-# Step 3: ติดตั้ง SSL + เปิด Auto Monitor
+# Step 3: ติดตั้ง SSL + เปิด Auto Monitor (ดึงโดเมนจาก API)
 sudo bash 3.install-ssl.sh
+
+# หรือใช้ domain.txt แทน API
+sudo bash 3.install-ssl.sh --domain-txt
 ```
 
 ---
@@ -48,7 +51,7 @@ sudo bash 3.install-ssl.sh
 | `ssl-monitor.sh` | Background service - เช็คโดเมนใหม่ทุก 30 นาที |
 | `ssl-monitor-ctl.sh` | คำสั่งจัดการ monitor (status, logs, stop, start) |
 | `cloudflare.ini` | Cloudflare API credentials |
-| `domain.txt` | (ไม่ได้ใช้แล้ว) รายชื่อโดเมนย้ายไปดึงจาก API |
+| `domain.txt` | รายชื่อโดเมน (ใช้เมื่อรันด้วย `--domain-txt`) |
 | `wmspanel_config.sh` | ตั้งค่า WMSPanel เพิ่มเติม |
 | `geo-block.sh` | ตั้งค่า Geo Blocking |
 | `ssl-origin.sh` | ตั้งค่า SSL Origin |
@@ -85,14 +88,29 @@ sudo bash 2.certbot-install.sh
 ## 3. ติดตั้ง SSL + เปิด Auto Monitor
 
 ```bash
+# ดึงโดเมนจาก API (default)
 sudo bash 3.install-ssl.sh
+
+# หรือ ใช้ domain.txt แทน
+sudo bash 3.install-ssl.sh --domain-txt
 ```
 
-สิ่งที่ทำ:
+| Option | คำอธิบาย |
+|--------|----------|
+| *(ไม่ใส่)* | ดึงรายชื่อโดเมนจาก API อัตโนมัติ |
+| `--domain-txt` | อ่านรายชื่อโดเมนจากไฟล์ `domain.txt` (คั่นด้วย `,`) |
+
+### รูปแบบ domain.txt
+
+```
+example1.com,example2.com,example3.top
+```
+
+### สิ่งที่ทำ:
 
 1. Copy `cloudflare.ini` ไปที่ `/certbot/cloudflare.ini`
 2. **Cleanup** - ลบ cert เดิม, renew timer/cron, monitor เก่าทั้งหมด
-3. ดึงรายชื่อโดเมนจาก **API**
+3. ดึงรายชื่อโดเมนจาก **API** หรือ **domain.txt** (ตาม option)
 4. ขอ Wildcard SSL (`*.domain`) ทุกโดเมน
 5. อัพเดท Nimble config + restart
 6. สร้าง deploy hook สำหรับ auto renew

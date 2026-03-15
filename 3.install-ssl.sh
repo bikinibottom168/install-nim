@@ -5,6 +5,8 @@ set -euo pipefail
 ### CONFIG
 ### ===============================
 API_URL="https://api-soccer.thai-play.com/api/domain/root-domains?token=353890"
+DOMAIN_FILE="./domain.txt"
+USE_DOMAIN_TXT=false
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CF_INI_SRC="${SCRIPT_DIR}/cloudflare.ini"
@@ -22,6 +24,27 @@ INSTALLED_DOMAINS_FILE="/etc/ssl-monitor/installed-domains.txt"
 # Telegram
 TG_TOKEN="8757371676:AAHPCzO0_d_7FIXaILiLnxgkqpEXBuMdVlM"
 TG_CHAT_ID="6795775557"
+
+### ===============================
+### PARSE OPTIONS
+### ===============================
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --domain-txt)
+      USE_DOMAIN_TXT=true
+      shift
+      ;;
+    *)
+      echo "❌ Unknown option: $1"
+      echo "Usage: sudo bash 3.install-ssl.sh [--domain-txt]"
+      echo ""
+      echo "Options:"
+      echo "  --domain-txt    ใช้ domain.txt แทน API"
+      echo "  (default)       ดึงโดเมนจาก API"
+      exit 1
+      ;;
+  esac
+done
 
 ### ===============================
 ### HELPERS
@@ -153,18 +176,31 @@ if [ ! -f "$CF_INI" ]; then
 fi
 
 ### ===============================
-### FETCH DOMAINS FROM API
+### FETCH DOMAINS
 ### ===============================
-echo "🌐 Fetching domains from API..."
-DOMAIN_LIST="$(fetch_domains_from_api)" || exit 1
-
 CLEAN_DOMAINS=()
-while IFS= read -r d; do
-  [ -n "$d" ] && CLEAN_DOMAINS+=("$d")
-done <<< "$DOMAIN_LIST"
+
+if [ "$USE_DOMAIN_TXT" = true ]; then
+  echo "🌐 Reading domains from $DOMAIN_FILE..."
+  if [ ! -f "$DOMAIN_FILE" ]; then
+    echo "❌ ไม่พบไฟล์ domain.txt: $DOMAIN_FILE"
+    exit 1
+  fi
+  RAW_DOMAINS="$(tr -d ' \n\r' < "$DOMAIN_FILE")"
+  IFS=',' read -ra DOMAIN_ARRAY <<< "$RAW_DOMAINS"
+  for d in "${DOMAIN_ARRAY[@]}"; do
+    [ -n "$d" ] && CLEAN_DOMAINS+=("$d")
+  done
+else
+  echo "🌐 Fetching domains from API..."
+  DOMAIN_LIST="$(fetch_domains_from_api)" || exit 1
+  while IFS= read -r d; do
+    [ -n "$d" ] && CLEAN_DOMAINS+=("$d")
+  done <<< "$DOMAIN_LIST"
+fi
 
 if [ "${#CLEAN_DOMAINS[@]}" -eq 0 ]; then
-  echo "❌ ไม่มีโดเมนจาก API"
+  echo "❌ ไม่มีโดเมน"
   exit 1
 fi
 
