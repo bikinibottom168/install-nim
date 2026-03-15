@@ -85,6 +85,32 @@ cp -f "$CF_INI_SRC" "$CF_INI"
 chmod 600 "$CF_INI"
 
 ### ===============================
+### CLEANUP: ลบ renew timer/cron และ cert เดิมทั้งหมด
+### ===============================
+echo "🧹 Removing all certbot renew timers and cron jobs..."
+
+# หยุดและปิด certbot renew timer (systemd)
+systemctl stop certbot.timer 2>/dev/null || true
+systemctl disable certbot.timer 2>/dev/null || true
+
+# ลบ cron job ของ certbot ทั้งหมด
+crontab -l 2>/dev/null | grep -v 'certbot' | crontab - 2>/dev/null || true
+rm -f /etc/cron.d/certbot
+
+echo "🧹 Removing all existing certbot certificates..."
+
+# ลบ cert ทั้งหมดที่ certbot จัดการอยู่
+for cert_name in $(certbot certificates 2>/dev/null | grep 'Certificate Name:' | awk '{print $3}'); do
+  echo "  🗑 Deleting certificate: $cert_name"
+  certbot delete --cert-name "$cert_name" --non-interactive 2>/dev/null || true
+done
+
+# ลบ deploy hook เดิม (ถ้ามี)
+rm -f "$RENEW_DEPLOY_HOOK"
+
+echo "✅ Cleanup done"
+
+### ===============================
 ### CHECK FILES
 ### ===============================
 if [ ! -f "$DOMAIN_FILE" ]; then
