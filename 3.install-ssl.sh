@@ -4,13 +4,11 @@ set -euo pipefail
 ### ===============================
 ### CONFIG
 ### ===============================
-DOMAIN_FILE="./domain.txt"
+API_URL="https://api-soccer.thai-play.com/api/domain/root-domains?token=353890"
 
-# cloudflare.ini ต้นฉบับอยู่ path เดียวกับไฟล์ .sh นี้
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CF_INI_SRC="${SCRIPT_DIR}/cloudflare.ini"
 
-# ปลายทางที่ต้องการ
 CF_INI="/certbot/cloudflare.ini"
 
 PROPAGATION=300
@@ -18,9 +16,24 @@ PROPAGATION=300
 NIMBLE_CONF="/etc/nimble/nimble.conf"
 RENEW_DEPLOY_HOOK="/etc/letsencrypt/renewal-hooks/deploy/99-nimble-reload.sh"
 
+# ไฟล์เก็บรายชื่อโดเมนที่ติดตั้ง SSL แล้ว
+INSTALLED_DOMAINS_FILE="/etc/ssl-monitor/installed-domains.txt"
+
+# Telegram
+TG_TOKEN="8757371676:AAHPCzO0_d_7FIXaILiLnxgkqpEXBuMdVlM"
+TG_CHAT_ID="6795775557"
+
 ### ===============================
 ### HELPERS
 ### ===============================
+send_telegram() {
+  local message="$1"
+  curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+    -d chat_id="${TG_CHAT_ID}" \
+    -d text="${message}" \
+    -d parse_mode="HTML" >/dev/null 2>&1 || true
+}
+
 restart_nimble() {
   if systemctl list-unit-files | grep -qE '^nimble\.service'; then
     systemctl restart nimble
@@ -61,6 +74,20 @@ EOF
   rm -f "$tmp"
 }
 
+fetch_domains_from_api() {
+  local response
+  response="$(curl -s --max-time 30 "$API_URL")" || { echo "❌ ไม่สามารถเชื่อมต่อ API ได้"; return 1; }
+
+  local ok
+  ok="$(echo "$response" | jq -r '.ok // false')"
+  if [ "$ok" != "true" ]; then
+    echo "❌ API response not ok"
+    return 1
+  fi
+
+  echo "$response" | jq -r '.domains[] | select(.excluded == false) | .domain'
+}
+
 ### ===============================
 ### CHECK ROOT
 ### ===============================
@@ -89,6 +116,10 @@ chmod 600 "$CF_INI"
 ### ===============================
 echo "🧹 Removing all certbot renew timers and cron jobs..."
 
+# หยุด ssl-monitor ถ้ากำลังทำงานอยู่
+systemctl stop ssl-monitor.service 2>/dev/null || true
+systemctl disable ssl-monitor.service 2>/dev/null || true
+
 # หยุดและปิด certbot renew timer (systemd)
 systemctl stop certbot.timer 2>/dev/null || true
 systemctl disable certbot.timer 2>/dev/null || true
@@ -108,34 +139,32 @@ done
 # ลบ deploy hook เดิม (ถ้ามี)
 rm -f "$RENEW_DEPLOY_HOOK"
 
+# ล้างรายชื่อโดเมนที่เคยติดตั้ง
+rm -f "$INSTALLED_DOMAINS_FILE"
+
 echo "✅ Cleanup done"
 
 ### ===============================
 ### CHECK FILES
 ### ===============================
-if [ ! -f "$DOMAIN_FILE" ]; then
-  echo "❌ ไม่พบไฟล์ domain.txt: $DOMAIN_FILE"
-  exit 1
-fi
-
 if [ ! -f "$CF_INI" ]; then
   echo "❌ ไม่พบไฟล์ $CF_INI"
   exit 1
 fi
 
 ### ===============================
-### READ DOMAINS
+### FETCH DOMAINS FROM API
 ### ===============================
-RAW_DOMAINS="$(tr -d ' \n\r' < "$DOMAIN_FILE")"
-IFS=',' read -ra DOMAIN_ARRAY <<< "$RAW_DOMAINS"
+echo "🌐 Fetching domains from API..."
+DOMAIN_LIST="$(fetch_domains_from_api)" || exit 1
 
 CLEAN_DOMAINS=()
-for d in "${DOMAIN_ARRAY[@]}"; do
+while IFS= read -r d; do
   [ -n "$d" ] && CLEAN_DOMAINS+=("$d")
-done
+done <<< "$DOMAIN_LIST"
 
 if [ "${#CLEAN_DOMAINS[@]}" -eq 0 ]; then
-  echo "❌ ไม่มีโดเมนใน domain.txt"
+  echo "❌ ไม่มีโดเมนจาก API"
   exit 1
 fi
 
@@ -147,7 +176,7 @@ for d in "${CLEAN_DOMAINS[@]}"; do
 done
 
 ### ===============================
-### BUILD -d PARAMS (ARRAY)  ✅ prevent glob expansion
+### BUILD -d PARAMS (ARRAY)
 ### ===============================
 DOMAIN_ARGS=()
 for d in "${CLEAN_DOMAINS[@]}"; do
@@ -185,6 +214,13 @@ update_nimble_ssl_paths "$FULLCHAIN" "$PRIVKEY"
 echo "🔄 Restarting Nimble service..."
 restart_nimble
 echo "✅ Nimble restarted"
+
+### ===============================
+### SAVE INSTALLED DOMAINS
+### ===============================
+mkdir -p "$(dirname "$INSTALLED_DOMAINS_FILE")"
+printf '%s\n' "${CLEAN_DOMAINS[@]}" > "$INSTALLED_DOMAINS_FILE"
+echo "📝 Saved installed domains to $INSTALLED_DOMAINS_FILE"
 
 ### ===============================
 ### AUTO RENEW: DEPLOY HOOK
@@ -241,7 +277,58 @@ echo "✅ Deploy hook created: $RENEW_DEPLOY_HOOK"
 echo "🧪 Testing renew (dry-run)..."
 certbot renew --dry-run
 
+### ===============================
+### INSTALL & START SSL MONITOR (background)
+### ===============================
+echo "🚀 Installing SSL Monitor background service..."
+
+# Copy ssl-monitor.sh to /usr/local/bin
+cp -f "${SCRIPT_DIR}/ssl-monitor.sh" /usr/local/bin/ssl-monitor.sh
+chmod +x /usr/local/bin/ssl-monitor.sh
+
+# Copy ssl-monitor-ctl.sh to /usr/local/bin
+cp -f "${SCRIPT_DIR}/ssl-monitor-ctl.sh" /usr/local/bin/ssl-monitor-ctl
+chmod +x /usr/local/bin/ssl-monitor-ctl
+
+# Create systemd service
+cat > /etc/systemd/system/ssl-monitor.service <<SVCEOF
+[Unit]
+Description=SSL Monitor - Auto install SSL for new domains
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ssl-monitor.sh
+Restart=on-failure
+RestartSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+systemctl daemon-reload
+systemctl enable ssl-monitor.service
+systemctl start ssl-monitor.service
+
+echo "✅ SSL Monitor service started"
+
+### ===============================
+### SEND TELEGRAM: START
+### ===============================
+HOSTNAME="$(hostname)"
+NOW="$(date '+%Y-%m-%d %H:%M:%S')"
+send_telegram "🟢 <b>AUTO_SSL_START</b> [${HOSTNAME}]
+📅 ${NOW}
+🌐 Domains: ${#CLEAN_DOMAINS[@]}
+$(printf '  • %s\n' "${CLEAN_DOMAINS[@]}")"
+
+echo ""
 echo "✅ All done!"
 echo "📌 CF ini: $CF_INI (copied from: $CF_INI_SRC)"
 echo "📌 Cert live dir (primary): /etc/letsencrypt/live/$PRIMARY_DOMAIN"
 echo "📌 Nimble config: $NIMBLE_CONF"
+echo "📌 SSL Monitor: systemctl status ssl-monitor"
+echo "📌 SSL Monitor control: ssl-monitor-ctl {status|logs|stop|restart}"
