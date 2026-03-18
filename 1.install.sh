@@ -61,16 +61,70 @@ CLONE_DEST="/tmp/remove-watermark"
 
 echo "[1/7] Adding Nimble Streamer repository and installing required packages..."
 
-# Add Nimble repository
-sudo bash -c 'echo -e "deb http://nimblestreamer.com/ubuntu jammy/" > /etc/apt/sources.list.d/nimble.list'
+# Detect OS and version
+detect_os() {
+  if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS_ID="$ID"
+    OS_VERSION="$VERSION_ID"
+  elif [ -f /etc/centos-release ]; then
+    OS_ID="centos"
+    OS_VERSION=$(grep -oE '[0-9]+' /etc/centos-release | head -1)
+  else
+    echo "ERROR: Cannot detect OS version" >&2
+    exit 1
+  fi
+}
 
-wget -q -O - http://nimblestreamer.com/gpg.key | sudo tee /etc/apt/trusted.gpg.d/nimble.asc
+detect_os
+echo "  Detected OS: ${OS_ID} ${OS_VERSION}"
 
-# Update package lists
-apt-get update
-
-# Install Nimble, git (for cloning), jq (JSON processing) and Certbot with Cloudflare
-apt-get install -y nimble git jq certbot python3-certbot-dns-cloudflare
+# Add Nimble repository based on OS version
+case "${OS_ID}" in
+  ubuntu)
+    case "${OS_VERSION}" in
+      24.04)
+        echo "  Setting up Nimble repo for Ubuntu 24.04 (Noble)..."
+        sudo curl -o /etc/apt/sources.list.d/nimble.sources https://nimblestreamer.com/ubuntu/nimble.sources
+        ;;
+      22.04)
+        echo "  Setting up Nimble repo for Ubuntu 22.04 (Jammy)..."
+        sudo bash -c 'echo -e "deb http://nimblestreamer.com/ubuntu jammy/" > /etc/apt/sources.list.d/nimble.list'
+        wget -q -O - http://nimblestreamer.com/gpg.key | sudo tee /etc/apt/trusted.gpg.d/nimble.asc
+        ;;
+      20.04)
+        echo "  Setting up Nimble repo for Ubuntu 20.04 (Focal)..."
+        sudo bash -c 'echo -e "deb http://nimblestreamer.com/ubuntu focal/" >> /etc/apt/sources.list'
+        wget -q -O - http://nimblestreamer.com/gpg.key | sudo apt-key add -
+        ;;
+      *)
+        echo "ERROR: Unsupported Ubuntu version: ${OS_VERSION} (supported: 20.04, 22.04, 24.04)" >&2
+        exit 1
+        ;;
+    esac
+    # Update package lists and install
+    apt-get update
+    apt-get install -y nimble git jq certbot python3-certbot-dns-cloudflare
+    ;;
+  centos)
+    case "${OS_VERSION}" in
+      7)
+        echo "  Setting up Nimble repo for CentOS 7..."
+        sudo bash -c 'echo -e "[nimble]\nname= Nimble Streamer repository\nbaseurl=http://nimblestreamer.com/centos/7/\$basearch\nenabled=1\ngpgcheck=1\ngpgkey=http://nimblestreamer.com/gpg.key\n" > /etc/yum.repos.d/nimble.repo'
+        ;;
+      *)
+        echo "ERROR: Unsupported CentOS version: ${OS_VERSION} (supported: 7)" >&2
+        exit 1
+        ;;
+    esac
+    # Install via yum
+    yum install -y nimble git jq certbot python3-certbot-dns-cloudflare
+    ;;
+  *)
+    echo "ERROR: Unsupported OS: ${OS_ID} (supported: ubuntu, centos)" >&2
+    exit 1
+    ;;
+esac
 
 # =====================
 # 2. Register the Nimble instance with WMSPanel
