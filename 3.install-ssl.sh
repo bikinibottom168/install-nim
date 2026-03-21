@@ -316,12 +316,6 @@ chmod +x "$RENEW_DEPLOY_HOOK"
 echo "✅ Deploy hook created: $RENEW_DEPLOY_HOOK"
 
 ### ===============================
-### TEST RENEW (DRY RUN)
-### ===============================
-echo "🧪 Testing renew (dry-run)..."
-certbot renew --dry-run
-
-### ===============================
 ### INSTALL & START SSL MONITOR (background)
 ### ===============================
 echo "🚀 Installing SSL Monitor background service..."

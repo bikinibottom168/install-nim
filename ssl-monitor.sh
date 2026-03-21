@@ -127,41 +127,51 @@ acquire_lock() {
 }
 
 ### ===============================
-### INSTALL SSL FOR NEW DOMAIN
+### INSTALL SSL FOR ALL DOMAINS (single cert)
 ### ===============================
-install_ssl_for_domain() {
-  local domain="$1"
+install_ssl_for_all_domains() {
+  local domains=("$@")
   local hostname
   hostname="$(hostname)"
   local now
   now="$(date '+%Y-%m-%d %H:%M:%S')"
+  local primary="${domains[0]}"
 
-  log "Installing SSL for new domain: *.$domain"
+  log "Installing SSL for ${#domains[@]} domain(s) in single cert"
+  for d in "${domains[@]}"; do
+    log "  - *.$d"
+  done
 
-  # ขอ cert wildcard
+  # สร้าง -d params
+  local domain_args=()
+  for d in "${domains[@]}"; do
+    domain_args+=("-d" "*.$d")
+  done
+
+  # ขอ cert wildcard รวมทุกโดเมน
   if ! certbot certonly \
     --dns-cloudflare \
     --dns-cloudflare-credentials "$CF_INI" \
     --dns-cloudflare-propagation-seconds "$PROPAGATION" \
-    -d "*.$domain" \
+    "${domain_args[@]}" \
     --non-interactive --agree-tos --register-unsafely-without-email 2>&1; then
-    log "ERROR: certbot failed for *.$domain"
+    log "ERROR: certbot failed"
     send_telegram "🔴 <b>AUTO_SSL_FAIL</b> [${hostname}]
 📅 ${now}
-❌ ติดตั้ง SSL ไม่สำเร็จ: *.$domain"
+❌ ติดตั้ง SSL ไม่สำเร็จ (${#domains[@]} domains)
+⚠️ ไม่ลบ cert เก่า (ยังใช้งานได้)"
     return 1
   fi
 
-  # หา cert directory
-  local cert_dir="/etc/letsencrypt/live/$domain"
+  # หา cert directory (ใช้ primary domain เป็นชื่อ)
+  local cert_dir="/etc/letsencrypt/live/$primary"
   local fullchain="$cert_dir/fullchain.pem"
   local privkey="$cert_dir/privkey.pem"
 
   # ถ้า cert directory ไม่มีตรง ลองหาจาก live/
   if [ ! -f "$fullchain" ]; then
-    # certbot อาจตั้งชื่อเป็น domain-0001 etc
     local alt_dir
-    alt_dir="$(find /etc/letsencrypt/live/ -maxdepth 1 -name "${domain}*" -type d | sort | tail -1)"
+    alt_dir="$(find /etc/letsencrypt/live/ -maxdepth 1 -name "${primary}*" -type d | sort | tail -1)"
     if [ -n "$alt_dir" ] && [ -f "$alt_dir/fullchain.pem" ]; then
       cert_dir="$alt_dir"
       fullchain="$cert_dir/fullchain.pem"
@@ -170,28 +180,42 @@ install_ssl_for_domain() {
   fi
 
   if [ ! -f "$fullchain" ] || [ ! -f "$privkey" ]; then
-    log "ERROR: cert files not found for $domain"
+    log "ERROR: cert files not found"
     send_telegram "🔴 <b>AUTO_SSL_FAIL</b> [${hostname}]
 📅 ${now}
-❌ ไม่พบไฟล์ cert: $domain"
+❌ ไม่พบไฟล์ cert: $primary
+⚠️ ไม่ลบ cert เก่า (ยังใช้งานได้)"
     return 1
   fi
+
+  # ลบ cert เก่าทั้งหมด (ยกเว้นอันใหม่)
+  for cert_name in $(certbot certificates 2>/dev/null | grep 'Certificate Name:' | awk '{print $3}'); do
+    if [ "$cert_name" = "$primary" ]; then
+      continue
+    fi
+    log "Deleting old certificate: $cert_name"
+    certbot delete --cert-name "$cert_name" --non-interactive 2>/dev/null || true
+  done
 
   # อัพเดท nimble config
   update_nimble_ssl_paths "$fullchain" "$privkey"
   restart_nimble
-  log "Nimble restarted with new SSL for $domain"
+  log "Nimble restarted with new SSL"
 
-  # บันทึกโดเมนที่ติดตั้งแล้ว
-  save_installed_domain "$domain"
+  # บันทึกโดเมนที่ติดตั้งแล้ว (เขียนทับทั้งหมด)
+  mkdir -p "$(dirname "$INSTALLED_DOMAINS_FILE")"
+  printf '%s\n' "${domains[@]}" > "$INSTALLED_DOMAINS_FILE"
 
   # แจ้ง Telegram
+  local domain_list
+  domain_list="$(printf '  • *.%s\n' "${domains[@]}")"
   send_telegram "🟢 <b>AUTO_SSL_NEW</b> [${hostname}]
 📅 ${now}
-✅ ติดตั้ง SSL สำเร็จ: *.$domain
+✅ ติดตั้ง SSL สำเร็จ (${#domains[@]} domains)
+${domain_list}
 📁 Cert: $cert_dir"
 
-  log "SSL installed successfully for *.$domain"
+  log "SSL installed successfully for ${#domains[@]} domain(s)"
   return 0
 }
 
@@ -228,28 +252,34 @@ while true; do
   # ดึงรายชื่อที่ติดตั้งแล้ว
   INSTALLED="$(get_installed_domains)"
 
-  # เช็คว่ามีโดเมนใหม่ไหม
-  NEW_COUNT=0
+  # รวมโดเมนทั้งหมดจาก API
+  ALL_DOMAINS=()
   while IFS= read -r domain; do
     [ -z "$domain" ] && continue
-
-    # เช็คว่าติดตั้งแล้วหรือยัง
-    if echo "$INSTALLED" | grep -qxF "$domain" 2>/dev/null; then
-      continue
-    fi
-
-    log "New domain found: $domain"
-    NEW_COUNT=$((NEW_COUNT + 1))
-
-    # ติดตั้ง SSL
-    install_ssl_for_domain "$domain" || true
-
+    ALL_DOMAINS+=("$domain")
   done <<< "$API_DOMAINS"
 
-  if [ "$NEW_COUNT" -eq 0 ]; then
+  if [ "${#ALL_DOMAINS[@]}" -eq 0 ]; then
+    log "No domains from API"
+    sleep "$CHECK_INTERVAL"
+    continue
+  fi
+
+  # เช็คว่ามีโดเมนใหม่ไหม (เทียบกับที่ติดตั้งแล้ว)
+  HAS_NEW=false
+  for domain in "${ALL_DOMAINS[@]}"; do
+    if ! echo "$INSTALLED" | grep -qxF "$domain" 2>/dev/null; then
+      log "New domain found: $domain"
+      HAS_NEW=true
+    fi
+  done
+
+  if [ "$HAS_NEW" = false ]; then
     log "No new domains found"
   else
-    log "Processed $NEW_COUNT new domain(s)"
+    # ติดตั้ง SSL ทุกโดเมนใน cert เดียว
+    log "New domain(s) detected, installing SSL for all ${#ALL_DOMAINS[@]} domain(s)..."
+    install_ssl_for_all_domains "${ALL_DOMAINS[@]}" || true
   fi
 
   sleep "$CHECK_INTERVAL"
