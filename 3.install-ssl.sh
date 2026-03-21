@@ -151,14 +151,6 @@ systemctl disable certbot.timer 2>/dev/null || true
 crontab -l 2>/dev/null | grep -v 'certbot' | crontab - 2>/dev/null || true
 rm -f /etc/cron.d/certbot
 
-echo "🧹 Removing all existing certbot certificates..."
-
-# ลบ cert ทั้งหมดที่ certbot จัดการอยู่
-for cert_name in $(certbot certificates 2>/dev/null | grep 'Certificate Name:' | awk '{print $3}'); do
-  echo "  🗑 Deleting certificate: $cert_name"
-  certbot delete --cert-name "$cert_name" --non-interactive 2>/dev/null || true
-done
-
 # ลบ deploy hook เดิม (ถ้ามี)
 rm -f "$RENEW_DEPLOY_HOOK"
 
@@ -250,6 +242,22 @@ update_nimble_ssl_paths "$FULLCHAIN" "$PRIVKEY"
 echo "🔄 Restarting Nimble service..."
 restart_nimble
 echo "✅ Nimble restarted"
+
+### ===============================
+### CLEANUP: ลบ cert เก่าทั้งหมด (ยกเว้นอันใหม่)
+### ===============================
+echo "🧹 Removing old certbot certificates (keeping: $PRIMARY_DOMAIN)..."
+
+for cert_name in $(certbot certificates 2>/dev/null | grep 'Certificate Name:' | awk '{print $3}'); do
+  if [ "$cert_name" = "$PRIMARY_DOMAIN" ]; then
+    echo "  ✅ Keeping certificate: $cert_name"
+    continue
+  fi
+  echo "  🗑 Deleting certificate: $cert_name"
+  certbot delete --cert-name "$cert_name" --non-interactive 2>/dev/null || true
+done
+
+echo "✅ Old certificates cleanup done"
 
 ### ===============================
 ### SAVE INSTALLED DOMAINS
