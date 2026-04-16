@@ -5,8 +5,9 @@ set -e
 ### ===============================
 ### CONFIG
 ### ===============================
-CF_API_KEY="a7f11f7aa567a9d7fe465d34f669f35087a89"
-CF_EMAIL="zzeedbet@gmail.com"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CF_INI_PLAIN="${SCRIPT_DIR}/cloudflare.ini"
+CF_INI_ENC="${SCRIPT_DIR}/cloudflare.ini.enc"
 
 CERTBOT_DIR="/certbot"
 CF_INI_PATH="/certbot/cloudflare.ini"
@@ -44,18 +45,56 @@ snap set certbot trust-plugin-with-root=ok
 snap install certbot-dns-cloudflare
 
 ### ===============================
-### CREATE cloudflare.ini
+### DECRYPT cloudflare.ini.enc -> cloudflare.ini
+### ===============================
+# repo เก็บเฉพาะ cloudflare.ini.enc (AES-256-CBC + PBKDF2)
+# ไฟล์ plain cloudflare.ini อยู่ใน .gitignore ไม่ถูก commit
+echo "🔐 Decrypting Cloudflare credentials..."
+
+if [ -f "$CF_INI_PLAIN" ]; then
+  echo "  ℹ️  พบ cloudflare.ini อยู่แล้ว ข้ามขั้นตอนถอดรหัส"
+elif [ -f "$CF_INI_ENC" ]; then
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "  📦 ติดตั้ง openssl..."
+    apt-get install -y openssl >/dev/null 2>&1 \
+      || { echo "❌ ติดตั้ง openssl ไม่สำเร็จ" >&2; exit 1; }
+  fi
+
+  for attempt in 1 2 3; do
+    echo -n "  🔑 ใส่ password สำหรับถอดรหัส cloudflare.ini.enc: "
+    read -rs CF_PASS
+    echo ""
+
+    if openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+        -in "$CF_INI_ENC" -out "$CF_INI_PLAIN" \
+        -pass pass:"$CF_PASS" 2>/dev/null; then
+      unset CF_PASS
+      chmod 600 "$CF_INI_PLAIN"
+      echo "  ✅ ถอดรหัสสำเร็จ"
+      break
+    else
+      rm -f "$CF_INI_PLAIN"
+      unset CF_PASS
+      if [ "$attempt" -lt 3 ]; then
+        echo "  ❌ password ไม่ถูกต้อง ลองอีกครั้ง ($attempt/3)"
+      else
+        echo "❌ ถอดรหัสล้มเหลวครบ 3 ครั้ง ยกเลิกการติดตั้ง" >&2
+        exit 1
+      fi
+    fi
+  done
+else
+  echo "❌ ไม่พบทั้ง cloudflare.ini และ cloudflare.ini.enc ใน $SCRIPT_DIR" >&2
+  exit 1
+fi
+
+### ===============================
+### COPY cloudflare.ini -> /certbot/cloudflare.ini
 ### ===============================
 echo "📁 Creating $CERTBOT_DIR"
 mkdir -p "$CERTBOT_DIR"
 
-echo "🔐 Creating cloudflare.ini"
-
-cat > "$CF_INI_PATH" <<EOF
-dns_cloudflare_api_key = $CF_API_KEY
-dns_cloudflare_email = $CF_EMAIL
-EOF
-
+cp -f "$CF_INI_PLAIN" "$CF_INI_PATH"
 chown root:root "$CF_INI_PATH"
 chmod 600 "$CF_INI_PATH"
 
