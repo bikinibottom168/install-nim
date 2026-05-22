@@ -1,13 +1,40 @@
-cat > /usr/local/bin/geo-allow-web.sh <<'EOF'
+cat > /usr/local/bin/geo-block-eu.sh <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
 # ====== CONFIG ======
-COUNTRIES=("th" "kh" "la" "sg" "ae" "vn" "lk" "mm")  # ประเทศที่อนุญาต (TH, KH, LA, SG, AE, VN, LK, MM)
-WORKDIR="/etc/ipset-countries" # โฟลเดอร์เก็บไฟล์ .zone (CIDR)
-SET_NAME_V4="cntry_allow_v4"
-SET_NAME_V6="cntry_allow_v6"
-ALLOW_PORTS="80,443,8081"      # จำกัดเว็บ + 8081 (RTMP 1935 ไม่แตะ)
+# ประเทศที่จะ BLOCK (ยุโรปทั้งหมด + UK + แอฟริกาทั้งหมด)
+COUNTRIES=(
+  # ===== EUROPE =====
+  # EU 27
+  at be bg hr cy cz dk ee fi fr de gr hu ie it lv lt lu mt nl pl pt ro sk si es se
+  # UK + EFTA
+  gb is no ch li
+  # Balkans + Eastern Europe
+  al ba mk me rs xk md ua by ru
+  # Microstates + Crown dependencies + Faroe/Gibraltar
+  ad mc sm va im je gg fo gi
+  # Turkey (ครึ่งยุโรปครึ่งเอเชีย)
+  tr
+
+  # ===== AFRICA =====
+  # North Africa
+  dz eg ly ma sd tn eh
+  # West Africa
+  bj bf cv ci gm gh gn gw lr ml mr ne ng sn sl tg
+  # Central Africa
+  ao cm cf td cg cd gq ga st
+  # East Africa
+  bi km dj er et ke mg mw mu yt mz re rw sc so ss tz ug
+  # Southern Africa
+  bw ls na za sz zm zw
+  # South Atlantic
+  sh
+)
+WORKDIR="/etc/ipset-countries"
+SET_NAME_V4="cntry_block_v4"
+SET_NAME_V6="cntry_block_v6"
+BLOCK_PORTS="80,443,8081"      # บล็อกเฉพาะพอร์ตเหล่านี้ (RTMP 1935 ไม่แตะ)
 IPDENY_V4="https://www.ipdeny.com/ipblocks/data/countries"
 IPDENY_V6="https://www.ipdeny.com/ipv6/ipaddresses/blocks"
 
@@ -17,26 +44,37 @@ apt-get install -y ipset netfilter-persistent ipset-persistent curl ca-certifica
 
 mkdir -p "$WORKDIR"
 
-echo "[*] Create ipset sets"
+# ====== Cleanup กฎเก่าจาก allow-list (ถ้าเคยรันเวอร์ชันก่อน) ======
+echo "[*] Cleanup old allow-list rules (if any)"
+for p in "80,443" "80,443,8081"; do
+  iptables   -D INPUT -p tcp -m multiport --dports "$p" -m set --match-set cntry_allow_v4 src -j ACCEPT 2>/dev/null || true
+  ip6tables  -D INPUT -p tcp -m multiport --dports "$p" -m set --match-set cntry_allow_v6 src -j ACCEPT 2>/dev/null || true
+  iptables   -D INPUT -p tcp -m multiport --dports "$p" -j DROP 2>/dev/null || true
+  ip6tables  -D INPUT -p tcp -m multiport --dports "$p" -j DROP 2>/dev/null || true
+done
+ipset destroy cntry_allow_v4 2>/dev/null || true
+ipset destroy cntry_allow_v6 2>/dev/null || true
+
+# ====== ลบ rule ที่อ้าง set เดิม (ของ block-list) ก่อน destroy ======
+echo "[*] Reset block-list ipset"
+iptables   -D INPUT -p tcp -m multiport --dports "$BLOCK_PORTS" -m set --match-set "$SET_NAME_V4" src -j DROP 2>/dev/null || true
+ip6tables  -D INPUT -p tcp -m multiport --dports "$BLOCK_PORTS" -m set --match-set "$SET_NAME_V6" src -j DROP 2>/dev/null || true
 ipset destroy $SET_NAME_V4 2>/dev/null || true
 ipset destroy $SET_NAME_V6 2>/dev/null || true
 
-ipset create $SET_NAME_V4 hash:net family inet  hashsize 1024 maxelem 100000
-ipset create $SET_NAME_V6 hash:net family inet6 hashsize 1024 maxelem 100000
+ipset create $SET_NAME_V4 hash:net family inet  hashsize 4096 maxelem 500000
+ipset create $SET_NAME_V6 hash:net family inet6 hashsize 4096 maxelem 500000
 
 echo "[*] Download country CIDRs and populate ipset"
 for c in "${COUNTRIES[@]}"; do
-  # IPv4
-  curl -fsSL "$IPDENY_V4/${c}.zone" -o "$WORKDIR/${c}.zone" || {
-    echo "[-] Failed to fetch $IPDENY_V4/${c}.zone"
-    exit 1
-  }
-  while read -r cidr; do
-    [[ -z "$cidr" ]] && continue
-    ipset add $SET_NAME_V4 "$cidr" 2>/dev/null || true
-  done < "$WORKDIR/${c}.zone"
-
-  # IPv6
+  if curl -fsSL "$IPDENY_V4/${c}.zone" -o "$WORKDIR/${c}.zone"; then
+    while read -r cidr; do
+      [[ -z "$cidr" ]] && continue
+      ipset add $SET_NAME_V4 "$cidr" 2>/dev/null || true
+    done < "$WORKDIR/${c}.zone"
+  else
+    echo "  [-] Skip $c (v4 zone not found)"
+  fi
   if curl -fsSL "$IPDENY_V6/${c}.zone" -o "$WORKDIR/${c}.ipv6.zone"; then
     while read -r cidr6; do
       [[ -z "$cidr6" ]] && continue
@@ -45,26 +83,14 @@ for c in "${COUNTRIES[@]}"; do
   fi
 done
 
-echo "[*] Insert iptables rules (only 80/443)"
-# ลบกฎเก่า
-iptables   -D INPUT -p tcp -m multiport --dports $ALLOW_PORTS -m set --match-set $SET_NAME_V4 src -j ACCEPT 2>/dev/null || true
-ip6tables  -D INPUT -p tcp -m multiport --dports $ALLOW_PORTS -m set --match-set $SET_NAME_V6 src -j ACCEPT 2>/dev/null || true
-iptables   -D INPUT -p tcp -m multiport --dports $ALLOW_PORTS -j DROP 2>/dev/null || true
-ip6tables  -D INPUT -p tcp -m multiport --dports $ALLOW_PORTS -j DROP 2>/dev/null || true
-
-# ใส่กฎใหม่
-iptables  -I INPUT 1 -p tcp -m multiport --dports $ALLOW_PORTS -m set --match-set $SET_NAME_V4 src -j ACCEPT
-ip6tables -I INPUT 1 -p tcp -m multiport --dports $ALLOW_PORTS -m set --match-set $SET_NAME_V6 src -j ACCEPT
-iptables  -I INPUT 2 -p tcp -m multiport --dports $ALLOW_PORTS -j DROP
-ip6tables -I INPUT 2 -p tcp -m multiport --dports $ALLOW_PORTS -j DROP
+echo "[*] Insert iptables DROP rules (ports $BLOCK_PORTS)"
+iptables  -I INPUT 1 -p tcp -m multiport --dports "$BLOCK_PORTS" -m set --match-set "$SET_NAME_V4" src -j DROP
+ip6tables -I INPUT 1 -p tcp -m multiport --dports "$BLOCK_PORTS" -m set --match-set "$SET_NAME_V6" src -j DROP
 
 echo "[*] Save ipset and firewall rules (persist across reboot)"
 mkdir -p /etc/iptables
-# ipset-persistent plugin โหลดไฟล์นี้ก่อน iptables ตอน boot
 ipset save > /etc/iptables/ipsets
 netfilter-persistent save
-
-# เปิด service ให้ start อัตโนมัติเมื่อ reboot
 systemctl enable netfilter-persistent >/dev/null 2>&1 || true
 
 # ====== VERIFY + AUTO-FIX ======
@@ -78,22 +104,12 @@ verify_rules() {
   if [[ "$v4_count" -lt 1 ]]; then echo "  [-] ipset v4 empty"; fails=$((fails+1)); else echo "  [+] ipset v4: $v4_count CIDRs"; fi
   if [[ "$v6_count" -lt 1 ]]; then echo "  [-] ipset v6 empty (อาจไม่มีใน ipdeny — ข้ามได้)"; else echo "  [+] ipset v6: $v6_count CIDRs"; fi
 
-  if iptables -C INPUT -p tcp -m multiport --dports "$ALLOW_PORTS" -m set --match-set "$SET_NAME_V4" src -j ACCEPT 2>/dev/null; then
-    echo "  [+] iptables v4 ACCEPT rule present"
-  else
-    echo "  [-] iptables v4 ACCEPT rule missing"; fails=$((fails+1))
-  fi
-  if iptables -C INPUT -p tcp -m multiport --dports "$ALLOW_PORTS" -j DROP 2>/dev/null; then
+  if iptables -C INPUT -p tcp -m multiport --dports "$BLOCK_PORTS" -m set --match-set "$SET_NAME_V4" src -j DROP 2>/dev/null; then
     echo "  [+] iptables v4 DROP rule present"
   else
     echo "  [-] iptables v4 DROP rule missing"; fails=$((fails+1))
   fi
-  if ip6tables -C INPUT -p tcp -m multiport --dports "$ALLOW_PORTS" -m set --match-set "$SET_NAME_V6" src -j ACCEPT 2>/dev/null; then
-    echo "  [+] ip6tables ACCEPT rule present"
-  else
-    echo "  [-] ip6tables ACCEPT rule missing"; fails=$((fails+1))
-  fi
-  if ip6tables -C INPUT -p tcp -m multiport --dports "$ALLOW_PORTS" -j DROP 2>/dev/null; then
+  if ip6tables -C INPUT -p tcp -m multiport --dports "$BLOCK_PORTS" -m set --match-set "$SET_NAME_V6" src -j DROP 2>/dev/null; then
     echo "  [+] ip6tables DROP rule present"
   else
     echo "  [-] ip6tables DROP rule missing"; fails=$((fails+1))
@@ -106,15 +122,11 @@ verify_rules() {
 }
 
 auto_fix() {
-  echo "[!] Auto-fix: re-applying rules..."
-  iptables   -D INPUT -p tcp -m multiport --dports "$ALLOW_PORTS" -m set --match-set "$SET_NAME_V4" src -j ACCEPT 2>/dev/null || true
-  ip6tables  -D INPUT -p tcp -m multiport --dports "$ALLOW_PORTS" -m set --match-set "$SET_NAME_V6" src -j ACCEPT 2>/dev/null || true
-  iptables   -D INPUT -p tcp -m multiport --dports "$ALLOW_PORTS" -j DROP 2>/dev/null || true
-  ip6tables  -D INPUT -p tcp -m multiport --dports "$ALLOW_PORTS" -j DROP 2>/dev/null || true
-  iptables  -I INPUT 1 -p tcp -m multiport --dports "$ALLOW_PORTS" -m set --match-set "$SET_NAME_V4" src -j ACCEPT
-  ip6tables -I INPUT 1 -p tcp -m multiport --dports "$ALLOW_PORTS" -m set --match-set "$SET_NAME_V6" src -j ACCEPT
-  iptables  -I INPUT 2 -p tcp -m multiport --dports "$ALLOW_PORTS" -j DROP
-  ip6tables -I INPUT 2 -p tcp -m multiport --dports "$ALLOW_PORTS" -j DROP
+  echo "[!] Auto-fix: re-applying DROP rules..."
+  iptables   -D INPUT -p tcp -m multiport --dports "$BLOCK_PORTS" -m set --match-set "$SET_NAME_V4" src -j DROP 2>/dev/null || true
+  ip6tables  -D INPUT -p tcp -m multiport --dports "$BLOCK_PORTS" -m set --match-set "$SET_NAME_V6" src -j DROP 2>/dev/null || true
+  iptables  -I INPUT 1 -p tcp -m multiport --dports "$BLOCK_PORTS" -m set --match-set "$SET_NAME_V4" src -j DROP
+  ip6tables -I INPUT 1 -p tcp -m multiport --dports "$BLOCK_PORTS" -m set --match-set "$SET_NAME_V6" src -j DROP
   mkdir -p /etc/iptables
   ipset save > /etc/iptables/ipsets
   netfilter-persistent save
@@ -141,16 +153,20 @@ if [[ $fails -gt 0 ]]; then
 fi
 
 echo "[+] Done.
-Allowed countries (ports $ALLOW_PORTS): ${COUNTRIES[*]}
-RTMP 1935, SSH 22 และพอร์ตอื่นไม่ถูกแตะต้อง
+Blocked: ${#COUNTRIES[@]} European countries on ports $BLOCK_PORTS
+Open globally: RTMP 1935, SSH 22, และพอร์ตอื่นทั้งหมด
 Reboot-safe: netfilter-persistent + ipset-persistent enabled"
 EOF
 
 # ให้สิทธิ์รันได้
-chmod +x /usr/local/bin/geo-allow-web.sh
+chmod +x /usr/local/bin/geo-block-eu.sh
+
+# ลบ script เก่า (allow-list) ถ้ามี
+rm -f /usr/local/bin/geo-allow-web.sh
+
+# ล้าง cron เก่า + ใส่ใหม่ (กัน duplicate)
+( crontab -l 2>/dev/null | grep -v 'geo-allow-web.sh' | grep -v 'geo-block-eu.sh'; \
+  echo "30 3 * * * /usr/local/bin/geo-block-eu.sh >> /var/log/geo-block.log 2>&1" ) | crontab -
 
 # รันครั้งแรก
-/usr/local/bin/geo-allow-web.sh
-
-# ตั้ง cron ทุกวันตี 3
-(crontab -l 2>/dev/null; echo "0 3 * * * /usr/local/bin/geo-allow-web.sh >> /var/log/geo-allow.log 2>&1") | crontab -
+/usr/local/bin/geo-block-eu.sh
