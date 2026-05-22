@@ -66,22 +66,28 @@ ipset create $SET_NAME_V4 hash:net family inet  hashsize 4096 maxelem 500000
 ipset create $SET_NAME_V6 hash:net family inet6 hashsize 4096 maxelem 500000
 
 echo "[*] Download country CIDRs and populate ipset"
+skipped_v4=()
+skipped_v6=()
 for c in "${COUNTRIES[@]}"; do
-  if curl -fsSL "$IPDENY_V4/${c}.zone" -o "$WORKDIR/${c}.zone"; then
+  if curl -fsL "$IPDENY_V4/${c}.zone" -o "$WORKDIR/${c}.zone" 2>/dev/null; then
     while read -r cidr; do
       [[ -z "$cidr" ]] && continue
       ipset add $SET_NAME_V4 "$cidr" 2>/dev/null || true
     done < "$WORKDIR/${c}.zone"
   else
-    echo "  [-] Skip $c (v4 zone not found)"
+    skipped_v4+=("$c")
   fi
-  if curl -fsSL "$IPDENY_V6/${c}.zone" -o "$WORKDIR/${c}.ipv6.zone"; then
+  if curl -fsL "$IPDENY_V6/${c}.zone" -o "$WORKDIR/${c}.ipv6.zone" 2>/dev/null; then
     while read -r cidr6; do
       [[ -z "$cidr6" ]] && continue
       ipset add $SET_NAME_V6 "$cidr6" 2>/dev/null || true
     done < "$WORKDIR/${c}.ipv6.zone"
+  else
+    skipped_v6+=("$c")
   fi
 done
+[[ ${#skipped_v4[@]} -gt 0 ]] && echo "  [-] No v4 zone: ${skipped_v4[*]}"
+[[ ${#skipped_v6[@]} -gt 0 ]] && echo "  [-] No v6 zone: ${skipped_v6[*]}"
 
 echo "[*] Insert iptables DROP rules (ports $BLOCK_PORTS)"
 iptables  -I INPUT 1 -p tcp -m multiport --dports "$BLOCK_PORTS" -m set --match-set "$SET_NAME_V4" src -j DROP
