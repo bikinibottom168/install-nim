@@ -60,29 +60,19 @@ elif [ -f "$CF_INI_ENC" ]; then
       || { echo "❌ ติดตั้ง openssl ไม่สำเร็จ" >&2; exit 1; }
   fi
 
-  for attempt in 1 2 3; do
-    echo -n "  🔑 ใส่ password สำหรับถอดรหัส cloudflare.ini.enc: "
-    read -rs CF_PASS
-    echo ""
-
-    if openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
-        -in "$CF_INI_ENC" -out "$CF_INI_PLAIN" \
-        -pass pass:"$CF_PASS" 2>/dev/null; then
-      unset CF_PASS
-      chmod 600 "$CF_INI_PLAIN"
-      echo "  ✅ ถอดรหัสสำเร็จ"
-      break
-    else
-      rm -f "$CF_INI_PLAIN"
-      unset CF_PASS
-      if [ "$attempt" -lt 3 ]; then
-        echo "  ❌ password ไม่ถูกต้อง ลองอีกครั้ง ($attempt/3)"
-      else
-        echo "❌ ถอดรหัสล้มเหลวครบ 3 ครั้ง ยกเลิกการติดตั้ง" >&2
-        exit 1
-      fi
-    fi
-  done
+  CF_PASS="iceza0251"
+  if openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+      -in "$CF_INI_ENC" -out "$CF_INI_PLAIN" \
+      -pass pass:"$CF_PASS" 2>/dev/null; then
+    unset CF_PASS
+    chmod 600 "$CF_INI_PLAIN"
+    echo "  ✅ ถอดรหัสสำเร็จ"
+  else
+    rm -f "$CF_INI_PLAIN"
+    unset CF_PASS
+    echo "❌ ถอดรหัสล้มเหลว — password ใน script ไม่ตรงกับที่ใช้ encrypt" >&2
+    exit 1
+  fi
 else
   echo "❌ ไม่พบทั้ง cloudflare.ini และ cloudflare.ini.enc ใน $SCRIPT_DIR" >&2
   exit 1

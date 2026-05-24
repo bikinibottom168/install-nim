@@ -3,7 +3,7 @@ set -euo pipefail
 
 ### ===============================
 ### SSL MONITOR - Background Service
-### เช็คโดเมนใหม่จาก API ทุก 30 นาที
+### เช็คโดเมนใหม่จาก API ทุก 5 นาที
 ### ===============================
 
 API_URL="https://api-soccer.thai-play.com/api/domain/root-domains?token=353890"
@@ -14,7 +14,7 @@ RENEW_DEPLOY_HOOK="/etc/letsencrypt/renewal-hooks/deploy/99-nimble-reload.sh"
 INSTALLED_DOMAINS_FILE="/etc/ssl-monitor/installed-domains.txt"
 LOCK_FILE="/var/run/ssl-monitor.lock"
 LOG_TAG="ssl-monitor"
-CHECK_INTERVAL=1800  # 30 นาที
+CHECK_INTERVAL=300  # 5 นาที
 
 # Telegram
 TG_TOKEN="8757371676:AAHPCzO0_d_7FIXaILiLnxgkqpEXBuMdVlM"
@@ -231,7 +231,7 @@ NOW="$(date '+%Y-%m-%d %H:%M:%S')"
 log "SSL Monitor started (PID: $$)"
 send_telegram "🟢 <b>AUTO_SSL_START</b> [${HOSTNAME}]
 📅 ${NOW}
-🔄 เริ่มเฝ้าระวังโดเมนใหม่ทุก 30 นาที"
+🔄 เริ่มเฝ้าระวังโดเมนใหม่ทุก 5 นาที"
 
 while true; do
   log "Checking for new domains..."

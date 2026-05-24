@@ -174,5 +174,31 @@ rm -f /usr/local/bin/geo-allow-web.sh
 ( crontab -l 2>/dev/null | grep -v 'geo-allow-web.sh' | grep -v 'geo-block-eu.sh'; \
   echo "30 3 * * * /usr/local/bin/geo-block-eu.sh >> /var/log/geo-block.log 2>&1" ) | crontab -
 
+# ====== systemd unit: refresh CIDR หลัง boot (defense in depth) ======
+# - netfilter-persistent โหลด rule เดิมจาก disk ก่อน (ทันที, offline-safe)
+# - unit นี้ตามมาหลัง network online → refresh CIDR ใหม่จาก ipdeny
+# - ถ้า fail จะไม่ทำให้ระบบพัง (รุล์เดิมยังทำงาน)
+cat > /etc/systemd/system/geo-block-eu.service <<'UNIT'
+[Unit]
+Description=Geo-block EU/UK/Africa firewall refresh on boot
+After=network-online.target netfilter-persistent.service
+Wants=network-online.target
+ConditionPathExists=/usr/local/bin/geo-block-eu.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/geo-block-eu.sh
+TimeoutStartSec=300
+StandardOutput=append:/var/log/geo-block.log
+StandardError=append:/var/log/geo-block.log
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable geo-block-eu.service >/dev/null 2>&1 || true
+
 # รันครั้งแรก
 /usr/local/bin/geo-block-eu.sh
