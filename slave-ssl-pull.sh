@@ -13,7 +13,7 @@ set -euo pipefail
 ###   6. รัน sync ครั้งแรก
 ### =============================================================
 
-DEFAULT_MAIN_HOST="117.55.203.34"
+DEFAULT_MAIN_HOST="168.199.21.170"
 DEFAULT_MAIN_USER="root"
 
 CONFIG_DIR="/etc/ssl-puller"

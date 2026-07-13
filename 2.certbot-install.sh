@@ -27,7 +27,36 @@ echo "✅ Running as root"
 ### ===============================
 echo "🔧 Installing snapd & certbot..."
 
-apt update
+### -------------------------------
+### DISABLE broken/stale apt repos
+### (เครื่องเก่า Ubuntu 18.04 บางเครื่องมี MariaDB mirror ที่ถูกปิดไปแล้ว
+###  ทำให้ apt update ล้มเหลว 404 -> set -e หยุดสคริปต์)
+### -------------------------------
+echo "🧹 Checking for broken apt repos..."
+
+# ครอบคลุมทั้ง sources.list, *.list และ *.sources (deb822)
+for f in /etc/apt/sources.list \
+         /etc/apt/sources.list.d/*.list \
+         /etc/apt/sources.list.d/*.sources; do
+  [ -f "$f" ] || continue
+  if grep -Eqs 'mirror\.lstn\.net/mariadb' "$f"; then
+    case "$f" in
+      /etc/apt/sources.list)
+        # ไฟล์รวม: comment เฉพาะบรรทัดที่ชี้ mirror ตาย
+        echo "  ⚠️  พบ MariaDB mirror ที่ใช้ไม่ได้ใน $f — comment บรรทัดทิ้ง"
+        sed -i -E 's|^([^#].*mirror\.lstn\.net/mariadb.*)$|# \1|' "$f"
+        ;;
+      *)
+        # ไฟล์แยกของ MariaDB: ปิดทั้งไฟล์ (rename เป็น .disabled)
+        echo "  ⚠️  พบ MariaDB mirror ที่ใช้ไม่ได้ใน $f — ปิดทั้งไฟล์"
+        mv -f "$f" "$f.disabled"
+      ;;
+    esac
+  fi
+done
+
+# apt update: ยอมให้ผ่านแม้บาง repo อื่นจะ error (เราต้องการแค่ archive หลัก)
+apt update || echo "  ⚠️  apt update มี warning จาก repo บางตัว (ข้ามได้)"
 apt install -y snapd
 
 snap install core
