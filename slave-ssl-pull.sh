@@ -33,7 +33,7 @@ fi
 ### ===============================
 echo "📦 Installing dependencies..."
 apt-get update -y >/dev/null 2>&1 || true
-apt-get install -y sshpass openssh-client curl
+apt-get install -y sshpass openssh-client curl openssl
 
 ### ===============================
 ### PROMPT FOR MAIN SERVER CONFIG
@@ -200,6 +200,17 @@ EOF
   rm -f "$tmp"
 }
 
+# ดึงรายชื่อโดเมน (SAN) จาก cert จริง — บอกได้ชัดว่า cert ครอบโดเมนอะไรบ้าง
+cert_domains() {
+  local cert="$1"
+  [ -f "$cert" ] || return 0
+  command -v openssl >/dev/null 2>&1 || return 0
+  openssl x509 -in "$cert" -noout -ext subjectAltName 2>/dev/null \
+    | grep -oE 'DNS:[^,]+' \
+    | sed 's/DNS://; s/[[:space:]]//g' \
+    | sort -u
+}
+
 ### โหลด config
 [ -f "$CONFIG" ]    || { log "ERROR: $CONFIG not found, run installer first"; exit 1; }
 [ -f "$PASS_FILE" ] || { log "ERROR: $PASS_FILE not found"; exit 1; }
@@ -292,15 +303,26 @@ done
 update_nimble_ssl_paths "$LOCAL_FULLCHAIN" "$LOCAL_PRIVKEY"
 restart_nimble
 
+### รายชื่อโดเมนที่ cert ครอบคลุม (จาก SAN)
+DOMAINS="$(cert_domains "$LOCAL_FULLCHAIN")"
+DOMAIN_COUNT="$(printf '%s\n' "$DOMAINS" | sed '/^$/d' | wc -l | tr -d ' ')"
+EXPIRY="$(openssl x509 -in "$LOCAL_FULLCHAIN" -noout -enddate 2>/dev/null | sed 's/notAfter=//')"
+
+log "SSL updated for $PRIMARY (from main $MAIN_HOST) — ${DOMAIN_COUNT} domain(s), expires: ${EXPIRY:-?}"
+while IFS= read -r dm; do
+  [ -n "$dm" ] && log "  • $dm"
+done <<< "$DOMAINS"
+
 HOSTNAME_VAL="$(hostname)"
 NOW="$(date '+%Y-%m-%d %H:%M:%S')"
 send_telegram "🟢 <b>SLAVE_SSL_PULL</b> [${HOSTNAME_VAL}]
 📅 ${NOW}
 ✅ Pulled new SSL from main ($MAIN_HOST)
 🌐 Primary: $PRIMARY
+📜 Domains (${DOMAIN_COUNT}):
+$(printf '%s\n' "$DOMAINS" | sed '/^$/d;s/^/  • /')
+⏳ Expires: ${EXPIRY:-?}
 📁 Cert: $LOCAL_CERT_DIR"
-
-log "SSL updated for $PRIMARY (from main $MAIN_HOST)"
 PULLER_EOF
 
 chmod +x "$PULLER_SCRIPT"
@@ -331,6 +353,37 @@ else
   echo "⚠️  First sync didn't complete (main อาจยังไม่มี cert พร้อม จะ retry อัตโนมัติทุก 5 นาที)"
 fi
 
+### ===============================
+### VERIFY: แสดง cert + รายชื่อโดเมนที่ดึงมาจริง
+### ===============================
+echo ""
+echo "=========================================="
+echo "  🔍 SSL ที่ดึงมาจาก main"
+echo "=========================================="
+PULLED_CERT="$(ls -1 /etc/ssl-puller/certs/*/fullchain.pem 2>/dev/null | head -n 1)"
+if [ -n "$PULLED_CERT" ] && command -v openssl >/dev/null 2>&1; then
+  PRIMARY_NAME="$(basename "$(dirname "$PULLED_CERT")")"
+  EXPIRY="$(openssl x509 -in "$PULLED_CERT" -noout -enddate 2>/dev/null | sed 's/notAfter=//')"
+  DOMAINS="$(openssl x509 -in "$PULLED_CERT" -noout -ext subjectAltName 2>/dev/null \
+    | grep -oE 'DNS:[^,]+' | sed 's/DNS://; s/[[:space:]]//g' | sort -u)"
+  DOMAIN_COUNT="$(printf '%s\n' "$DOMAINS" | sed '/^$/d' | wc -l | tr -d ' ')"
+
+  echo "✅ Primary : $PRIMARY_NAME"
+  echo "⏳ Expires : ${EXPIRY:-?}"
+  echo "📜 Domains ที่เปิด SSL (${DOMAIN_COUNT}):"
+  printf '%s\n' "$DOMAINS" | sed '/^$/d;s/^/   • /'
+
+  # ตรวจว่า nimble.conf ชี้มาที่ cert ก้อนนี้แล้วหรือยัง
+  if grep -q "$PULLED_CERT" /etc/nimble/nimble.conf 2>/dev/null; then
+    echo "🛠  nimble.conf : ✅ ชี้มาที่ cert นี้แล้ว"
+  else
+    echo "🛠  nimble.conf : ⚠️  ยังไม่ได้ชี้มาที่ cert นี้ (จะอัปเดตรอบถัดไปเมื่อ cert เปลี่ยน)"
+  fi
+else
+  echo "⚠️  ยังไม่มี cert ถูกดึงมา — main อาจยังไม่มี cert พร้อม"
+  echo "    ระบบจะลองใหม่อัตโนมัติทุก 5 นาที (ดู: tail -f $LOG_FILE)"
+fi
+
 echo ""
 echo "=========================================="
 echo "  ✅ Setup complete!"
@@ -343,3 +396,4 @@ echo ""
 echo "🔍 ดูสถานะล่าสุด:  tail -50 $LOG_FILE"
 echo "🧪 รัน sync มือ:    SKIP_JITTER=1 sudo $PULLER_SCRIPT"
 echo "📂 Cert ปัจจุบัน:    ls -la /etc/ssl-puller/certs/"
+echo "📜 ดูโดเมนใน cert:  openssl x509 -in /etc/ssl-puller/certs/*/fullchain.pem -noout -ext subjectAltName"

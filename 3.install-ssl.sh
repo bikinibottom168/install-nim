@@ -215,10 +215,15 @@ done
 ### RUN CERTBOT
 ### ===============================
 echo "🔐 Requesting Wildcard SSL..."
+# --cert-name บังคับชื่อ lineage = PRIMARY_DOMAIN เสมอ
+# กันไม่ให้ certbot สร้าง lineage ใหม่แบบเติม suffix (-0001) เมื่อชื่อซ้ำ
+# ซึ่งจะทำให้ path ใน nimble.conf ผิด + cleanup ลบ cert ใหม่ทิ้ง
 certbot certonly \
   --dns-cloudflare \
   --dns-cloudflare-credentials "$CF_INI" \
   --dns-cloudflare-propagation-seconds "$PROPAGATION" \
+  --cert-name "$PRIMARY_DOMAIN" \
+  --non-interactive \
   "${DOMAIN_ARGS[@]}"
 
 ### ===============================
@@ -227,6 +232,19 @@ certbot certonly \
 CERT_DIR="/etc/letsencrypt/live/$PRIMARY_DOMAIN"
 FULLCHAIN="$CERT_DIR/fullchain.pem"
 PRIVKEY="$CERT_DIR/privkey.pem"
+
+# Fallback: ถ้าไม่เจอ path ตามชื่อ ให้ถาม certbot ว่า cert อยู่ path ไหนจริง
+if [ ! -f "$FULLCHAIN" ] || [ ! -f "$PRIVKEY" ]; then
+  echo "⚠️  ไม่พบ cert ที่ $CERT_DIR — ค้นหา path จริงจาก certbot..."
+  REAL_PATH="$(certbot certificates --cert-name "$PRIMARY_DOMAIN" 2>/dev/null \
+    | awk -F': ' '/Certificate Path:/{print $2}' | head -n1)"
+  if [ -n "$REAL_PATH" ] && [ -f "$REAL_PATH" ]; then
+    CERT_DIR="$(dirname "$REAL_PATH")"
+    FULLCHAIN="$CERT_DIR/fullchain.pem"
+    PRIVKEY="$CERT_DIR/privkey.pem"
+    echo "  ✅ พบ cert จริงที่: $CERT_DIR"
+  fi
+fi
 
 if [ ! -f "$FULLCHAIN" ] || [ ! -f "$PRIVKEY" ]; then
   echo "❌ ไม่พบไฟล์ cert ที่คาดไว้:"
