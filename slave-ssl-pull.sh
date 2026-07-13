@@ -333,8 +333,13 @@ echo "✅ Puller installed"
 ### ===============================
 echo ""
 echo "⏰ Setting up cron (every 5 minutes)..."
-( crontab -l 2>/dev/null | grep -v 'ssl-pull.sh'; \
-  echo "*/5 * * * * $PULLER_SCRIPT >> $LOG_FILE 2>&1" ) | crontab -
+# หมายเหตุ: ใส่ || true กัน set -e/pipefail ฆ่าสคริปต์
+# กรณีเครื่องใหม่ที่ root ยังไม่มี crontab (crontab -l จะคืน exit code != 0)
+EXISTING_CRON="$(crontab -l 2>/dev/null | grep -v 'ssl-pull.sh' || true)"
+{
+  if [ -n "$EXISTING_CRON" ]; then printf '%s\n' "$EXISTING_CRON"; fi
+  echo "*/5 * * * * $PULLER_SCRIPT >> $LOG_FILE 2>&1"
+} | crontab -
 
 touch "$LOG_FILE"
 chmod 600 "$LOG_FILE"
